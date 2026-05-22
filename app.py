@@ -19,16 +19,11 @@ st.set_page_config(
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap');
-
-    html, body, [class*="css"] {
-        font-family: 'Syne', sans-serif;
-    }
-
+    html, body, [class*="css"] { font-family: 'Syne', sans-serif; }
     .stApp {
         background: linear-gradient(160deg, #020c1b 0%, #041524 50%, #061e35 100%);
         color: #e0f2fe;
     }
-
     .hero-title {
         font-family: 'Syne', sans-serif;
         font-weight: 800;
@@ -38,7 +33,6 @@ st.markdown("""
         -webkit-text-fill-color: transparent;
         margin-bottom: 0.2rem;
     }
-
     .hero-sub {
         font-family: 'Space Mono', monospace;
         font-size: 0.78rem;
@@ -47,7 +41,6 @@ st.markdown("""
         text-transform: uppercase;
         margin-bottom: 2rem;
     }
-
     .card {
         background: rgba(255,255,255,0.04);
         border: 1px solid rgba(56,189,248,0.15);
@@ -56,7 +49,6 @@ st.markdown("""
         margin-bottom: 1.2rem;
         backdrop-filter: blur(8px);
     }
-
     .pred-label {
         font-family: 'Space Mono', monospace;
         font-size: 0.7rem;
@@ -65,20 +57,17 @@ st.markdown("""
         letter-spacing: 0.1em;
         margin-bottom: 4px;
     }
-
     .pred-value {
         font-family: 'Syne', sans-serif;
         font-weight: 800;
         font-size: 2rem;
         color: #38bdf8;
     }
-
     .conf-value {
         font-family: 'Space Mono', monospace;
         font-size: 1.1rem;
         color: #a5f3fc;
     }
-
     .warning-box {
         background: rgba(251,191,36,0.08);
         border: 1px solid rgba(251,191,36,0.3);
@@ -87,8 +76,30 @@ st.markdown("""
         font-size: 0.82rem;
         color: #fbbf24;
         font-family: 'Space Mono', monospace;
+        margin-bottom: 1rem;
     }
-
+    .danger-box {
+        background: rgba(239,68,68,0.08);
+        border: 1px solid rgba(239,68,68,0.35);
+        border-radius: 12px;
+        padding: 1.2rem 1.4rem;
+        font-size: 0.88rem;
+        color: #fca5a5;
+        font-family: 'Space Mono', monospace;
+        margin-bottom: 1rem;
+        text-align: center;
+    }
+    .danger-icon {
+        font-size: 2.5rem;
+        margin-bottom: 0.4rem;
+    }
+    .danger-title {
+        font-family: 'Syne', sans-serif;
+        font-weight: 800;
+        font-size: 1.3rem;
+        color: #f87171;
+        margin-bottom: 0.3rem;
+    }
     .info-box {
         background: rgba(56,189,248,0.06);
         border: 1px solid rgba(56,189,248,0.2);
@@ -98,7 +109,6 @@ st.markdown("""
         color: #7dd3fc;
         font-family: 'Space Mono', monospace;
     }
-
     .footer-text {
         font-family: 'Space Mono', monospace;
         font-size: 0.68rem;
@@ -107,7 +117,6 @@ st.markdown("""
         margin-top: 3rem;
         letter-spacing: 0.06em;
     }
-
     div[data-testid="stFileUploader"] {
         border: 2px dashed rgba(56,189,248,0.25);
         border-radius: 14px;
@@ -137,6 +146,9 @@ CLASS_ICONS = {
     'Starfish': '⭐', 'Turtle_Tortoise': '🐢', 'Whale': '🐋'
 }
 
+# Confidence threshold — below this = likely NOT a sea animal
+NOT_SEA_ANIMAL_THRESHOLD = 30.0  # percent
+
 # ─────────────────────────────────────────────
 # MODEL LOADING
 # ─────────────────────────────────────────────
@@ -149,18 +161,32 @@ def load_model():
     return tf.keras.models.load_model(MODEL_PATH)
 
 # ─────────────────────────────────────────────
-# PREPROCESSING — matches EfficientNet training
+# PREPROCESSING — correct EfficientNet scaling
 # ─────────────────────────────────────────────
-def preprocess_image(pil_img: Image.Image) -> np.ndarray:
-    """
-    Resize to 224×224 and apply EfficientNet preprocessing
-    (scales pixels to [-1, 1] range, NOT /255).
-    """
+def preprocess_image(pil_img):
     img = pil_img.convert("RGB").resize((224, 224), Image.LANCZOS)
     arr = np.array(img, dtype=np.float32)
-    # EfficientNet expects tf.keras.applications.efficientnet.preprocess_input
     arr = tf.keras.applications.efficientnet.preprocess_input(arr)
     return np.expand_dims(arr, axis=0)
+
+# ─────────────────────────────────────────────
+# NOT-A-SEA-ANIMAL DETECTION
+# ─────────────────────────────────────────────
+def is_not_sea_animal(predictions):
+    """
+    Returns True if the image is likely NOT a sea animal.
+    Logic: if the top confidence is below threshold AND
+    the top-5 probabilities are all very spread/low,
+    the model has no strong sea animal signal.
+    """
+    top_conf = float(np.max(predictions)) * 100
+    # Entropy check: high entropy = model very uncertain across all classes
+    probs = predictions + 1e-9  # avoid log(0)
+    entropy = -np.sum(probs * np.log(probs))
+    max_entropy = np.log(len(CLASSES))
+    normalized_entropy = entropy / max_entropy  # 0=certain, 1=totally random
+
+    return top_conf < NOT_SEA_ANIMAL_THRESHOLD and normalized_entropy > 0.92
 
 # ─────────────────────────────────────────────
 # UI — HEADER
@@ -175,10 +201,10 @@ with st.spinner("Loading model..."):
     model = load_model()
 
 if model is None:
-    st.error(f"❌ Model file `{MODEL_PATH}` not found. Make sure it is in the same directory as app.py.")
+    st.error(f"❌ Model file `{MODEL_PATH}` not found. Place it in the same directory as app.py.")
     st.stop()
 else:
-    st.markdown('<div class="info-box">✅ Model loaded successfully — ready to classify</div>', unsafe_allow_html=True)
+    st.markdown('<div class="info-box">✅ Model loaded — ready to classify</div>', unsafe_allow_html=True)
     st.write("")
 
 # ─────────────────────────────────────────────
@@ -191,17 +217,30 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    # Show image
     pil_img = Image.open(uploaded_file).convert("RGB")
     st.image(pil_img, caption="Uploaded Image", use_column_width=True)
     st.write("")
 
     # ── PREDICT ──
     with st.spinner("Analyzing..."):
-        processed = preprocess_image(pil_img)
-        predictions = model.predict(processed, verbose=0)[0]      # shape: (23,)
+        processed   = preprocess_image(pil_img)
+        predictions = model.predict(processed, verbose=0)[0]  # shape: (23,)
 
-    top_n = 5
+    # ── NOT A SEA ANIMAL CHECK ──
+    if is_not_sea_animal(predictions):
+        st.markdown("""
+        <div class="danger-box">
+            <div class="danger-icon">🚫</div>
+            <div class="danger-title">Not a Sea Animal</div>
+            <div>This image does not appear to contain any of the 23 sea animal
+            categories this model was trained on.<br><br>
+            Please upload a clear image of a sea creature such as an octopus,
+            shark, dolphin, crab, jellyfish, etc.</div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.stop()
+
+    top_n       = 5
     top_indices = np.argsort(predictions)[::-1][:top_n]
     top_classes = [CLASSES[i] for i in top_indices]
     top_probs   = [float(predictions[i]) * 100 for i in top_indices]
@@ -221,60 +260,55 @@ if uploaded_file is not None:
     </div>
     """, unsafe_allow_html=True)
 
-    # Low confidence warning
+    # Low-confidence warning
     if best_conf < 50:
         st.markdown(f"""
         <div class="warning-box">
-            ⚠️ Low confidence ({best_conf:.1f}%) — the model is uncertain.
-            The correct answer may be among the Top 5 predictions below.
+            ⚠️ Low confidence ({best_conf:.1f}%) — model is uncertain.
+            The correct answer may appear in the Top 5 below.
         </div>
         """, unsafe_allow_html=True)
-        st.write("")
 
-    # ── TOP 5 CHART ──
+    # ── TOP 5 CHART — pure HTML, zero extra deps ──
     st.markdown("### Top 5 Predictions")
 
-    colors = ["#38bdf8" if i == 0 else "#1e3a5f" for i in range(top_n)]
+    max_prob  = max(top_probs) if max(top_probs) > 0 else 1
+    bars_html = ""
+    for i, (cls, prob) in enumerate(zip(top_classes, top_probs)):
+        icon        = CLASS_ICONS.get(cls, "•")
+        bar_pct     = prob / max_prob * 100
+        bar_color   = "#38bdf8" if i == 0 else "#1e4a6e"
+        label_color = "#e0f2fe" if i == 0 else "#94a3b8"
+        bars_html  += f"""
+        <div style="display:flex;align-items:center;margin-bottom:10px;gap:10px;">
+            <div style="width:145px;text-align:right;font-family:'Space Mono',monospace;
+                        font-size:0.76rem;color:{label_color};white-space:nowrap;flex-shrink:0;">
+                {icon} {cls}
+            </div>
+            <div style="flex:1;background:rgba(255,255,255,0.05);border-radius:6px;
+                        overflow:hidden;height:20px;">
+                <div style="width:{bar_pct:.1f}%;background:{bar_color};height:100%;
+                            border-radius:6px;"></div>
+            </div>
+            <div style="width:50px;font-family:'Space Mono',monospace;font-size:0.74rem;
+                        color:{label_color};text-align:right;flex-shrink:0;">
+                {prob:.1f}%
+            </div>
+        </div>"""
 
-    fig = go.Figure(go.Bar(
-        x=top_probs[::-1],
-        y=top_classes[::-1],
-        orientation="h",
-        marker=dict(color=colors[::-1], line=dict(width=0)),
-        text=[f"{p:.1f}%" for p in top_probs[::-1]],
-        textposition="outside",
-        textfont=dict(color="#94a3b8", size=11, family="Space Mono"),
-    ))
-
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(
-            showgrid=True,
-            gridcolor="rgba(255,255,255,0.05)",
-            tickfont=dict(color="#64748b", size=10, family="Space Mono"),
-            title=dict(text="Confidence (%)", font=dict(color="#64748b", size=11)),
-            range=[0, max(top_probs) * 1.2]
-        ),
-        yaxis=dict(
-            tickfont=dict(color="#94a3b8", size=12, family="Syne"),
-        ),
-        margin=dict(l=10, r=60, t=10, b=30),
-        height=260,
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
+    st.markdown(f'<div class="card" style="padding:1.2rem 1.4rem;">{bars_html}</div>',
+                unsafe_allow_html=True)
 
     # ── FULL PROBABILITY TABLE (expandable) ──
-    with st.expander("📊 View all class probabilities"):
+    with st.expander("📊 View all 23 class probabilities"):
         all_sorted = sorted(zip(CLASSES, predictions), key=lambda x: x[1], reverse=True)
         for rank, (cls, prob) in enumerate(all_sorted, 1):
-            icon = CLASS_ICONS.get(cls, "•")
-            pct  = prob * 100
+            icon     = CLASS_ICONS.get(cls, "•")
+            pct      = prob * 100
             bar_fill = int(pct / 100 * 20)
-            bar = "█" * bar_fill + "░" * (20 - bar_fill)
+            bar      = "█" * bar_fill + "░" * (20 - bar_fill)
             st.markdown(
-                f"<span style='font-family:Space Mono;font-size:0.78rem;color:#64748b;'>"
+                f"<span style='font-family:Space Mono,monospace;font-size:0.76rem;color:#64748b;'>"
                 f"#{rank:02d} {icon} <b style='color:#94a3b8;'>{cls:<18}</b> "
                 f"<span style='color:#38bdf8;'>{bar}</span> {pct:5.2f}%"
                 f"</span>",
@@ -287,7 +321,6 @@ if uploaded_file is not None:
 st.markdown("""
 <div class="footer-text">
     Model: EfficientNetB0 &nbsp;·&nbsp; Input: 224×224 &nbsp;·&nbsp;
-    Classes: 23 &nbsp;·&nbsp; Built with TensorFlow & Streamlit
+    Classes: 23 &nbsp;·&nbsp; Built with TensorFlow &amp; Streamlit
 </div>
 """, unsafe_allow_html=True)
-            
