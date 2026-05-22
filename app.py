@@ -157,7 +157,7 @@ NON_SEA_KEYWORDS = [
 # ─────────────────────────────────────────────
 # MODEL LOADING
 # ─────────────────────────────────────────────
-MODEL_PATH = "efficientnet_sea_model.h5"
+MODEL_PATH = "efficientnet_sea_model_improved.h5"
 
 @st.cache_resource(show_spinner=False)
 def load_model():
