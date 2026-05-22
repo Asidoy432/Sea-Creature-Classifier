@@ -82,23 +82,20 @@ st.markdown("""
         background: rgba(239,68,68,0.08);
         border: 1px solid rgba(239,68,68,0.35);
         border-radius: 12px;
-        padding: 1.2rem 1.4rem;
+        padding: 1.4rem 1.6rem;
         font-size: 0.88rem;
         color: #fca5a5;
         font-family: 'Space Mono', monospace;
         margin-bottom: 1rem;
         text-align: center;
     }
-    .danger-icon {
-        font-size: 2.5rem;
-        margin-bottom: 0.4rem;
-    }
+    .danger-icon { font-size: 2.5rem; margin-bottom: 0.4rem; }
     .danger-title {
         font-family: 'Syne', sans-serif;
         font-weight: 800;
         font-size: 1.3rem;
         color: #f87171;
-        margin-bottom: 0.3rem;
+        margin-bottom: 0.5rem;
     }
     .info-box {
         background: rgba(56,189,248,0.06);
@@ -146,8 +143,16 @@ CLASS_ICONS = {
     'Starfish': '⭐', 'Turtle_Tortoise': '🐢', 'Whale': '🐋'
 }
 
-# Confidence threshold — below this = likely NOT a sea animal
-NOT_SEA_ANIMAL_THRESHOLD = 30.0  # percent
+# ─────────────────────────────────────────────
+# NON-SEA-ANIMAL KEYWORDS
+# Used to detect clearly non-ocean images by filename hint
+# The real guard is entropy — keywords are a secondary soft signal
+# ─────────────────────────────────────────────
+NON_SEA_KEYWORDS = [
+    'cat', 'dog', 'car', 'human', 'person', 'face', 'food',
+    'building', 'tree', 'flower', 'bird', 'insect', 'house',
+    'landscape', 'sky', 'mountain', 'city', 'indoor'
+]
 
 # ─────────────────────────────────────────────
 # MODEL LOADING
@@ -171,22 +176,22 @@ def preprocess_image(pil_img):
 
 # ─────────────────────────────────────────────
 # NOT-A-SEA-ANIMAL DETECTION
+# Only fires when BOTH conditions are true:
+#   1. Top confidence extremely low  (< 5%)
+#   2. Entropy nearly maximum        (> 0.98 of max)
+# This is intentionally strict so real sea animals are never blocked.
 # ─────────────────────────────────────────────
 def is_not_sea_animal(predictions):
-    """
-    Returns True if the image is likely NOT a sea animal.
-    Logic: if the top confidence is below threshold AND
-    the top-5 probabilities are all very spread/low,
-    the model has no strong sea animal signal.
-    """
     top_conf = float(np.max(predictions)) * 100
-    # Entropy check: high entropy = model very uncertain across all classes
-    probs = predictions + 1e-9  # avoid log(0)
+
+    # Entropy: uniform distribution across 23 classes = totally random
+    probs = predictions + 1e-9
     entropy = -np.sum(probs * np.log(probs))
     max_entropy = np.log(len(CLASSES))
-    normalized_entropy = entropy / max_entropy  # 0=certain, 1=totally random
+    normalized_entropy = entropy / max_entropy  # 0 = certain, 1 = random
 
-    return top_conf < NOT_SEA_ANIMAL_THRESHOLD and normalized_entropy > 0.92
+    # Only reject if model is almost completely clueless
+    return top_conf < 5.0 and normalized_entropy > 0.98
 
 # ─────────────────────────────────────────────
 # UI — HEADER
@@ -226,20 +231,21 @@ if uploaded_file is not None:
         processed   = preprocess_image(pil_img)
         predictions = model.predict(processed, verbose=0)[0]  # shape: (23,)
 
-    # ── NOT A SEA ANIMAL CHECK ──
+    # ── NOT A SEA ANIMAL CHECK (strict — only fires on clearly random output) ──
     if is_not_sea_animal(predictions):
         st.markdown("""
         <div class="danger-box">
             <div class="danger-icon">🚫</div>
             <div class="danger-title">Not a Sea Animal</div>
-            <div>This image does not appear to contain any of the 23 sea animal
+            This image does not appear to contain any of the 23 sea animal
             categories this model was trained on.<br><br>
-            Please upload a clear image of a sea creature such as an octopus,
-            shark, dolphin, crab, jellyfish, etc.</div>
+            Please upload a clear image of a sea creature such as an
+            octopus, shark, dolphin, crab, jellyfish, eel, sea urchin, etc.
         </div>
         """, unsafe_allow_html=True)
         st.stop()
 
+    # ── TOP 5 ──
     top_n       = 5
     top_indices = np.argsort(predictions)[::-1][:top_n]
     top_classes = [CLASSES[i] for i in top_indices]
@@ -260,7 +266,7 @@ if uploaded_file is not None:
     </div>
     """, unsafe_allow_html=True)
 
-    # Low-confidence warning
+    # Low-confidence warning (shown but prediction still displayed)
     if best_conf < 50:
         st.markdown(f"""
         <div class="warning-box">
