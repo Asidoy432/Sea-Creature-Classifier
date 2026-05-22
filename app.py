@@ -1,8 +1,12 @@
 import streamlit as st
 import numpy as np
 from PIL import Image
-import tensorflow as tf
 import os
+
+# ── Keras 3 compatible import ──────────────────────────────────────────────────
+# Must import keras directly (not via tf.keras) when using standalone keras==3.x
+import keras
+import tensorflow as tf
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -51,7 +55,8 @@ def load_model():
             "Make sure the file is in the same directory as `app.py`."
         )
         st.stop()
-    model = tf.keras.models.load_model(MODEL_PATH)
+    # compile=False avoids optimizer from_config TypeError on version mismatches
+    model = keras.models.load_model(MODEL_PATH, compile=False)
     return model
 
 
@@ -105,13 +110,12 @@ if uploaded:
         top5_labels = [CLASS_NAMES[i] for i in top5_idx]
         top5_scores = [float(all_preds[i]) * 100 for i in top5_idx]
 
+        import pandas as pd
+
         chart_data = {
             "Species": top5_labels,
             "Confidence (%)": top5_scores,
         }
-
-        import pandas as pd
-
         df = pd.DataFrame(chart_data).set_index("Species")
         st.bar_chart(df, horizontal=True)
 
@@ -124,3 +128,4 @@ st.caption(
     "Model: EfficientNet · Input: 224 × 224 · Classes: 23 · "
     "Built with TensorFlow & Streamlit"
 )
+
